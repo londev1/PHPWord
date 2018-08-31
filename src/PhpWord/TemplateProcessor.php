@@ -29,6 +29,9 @@ class TemplateProcessor
 {
     const MAXIMUM_REPLACEMENTS_DEFAULT = -1;
 
+    protected $newPictures = array();
+    protected $tempDocumentMainRels;
+    protected $tempContentType;
     /**
      * ZipArchive object.
      *
@@ -101,6 +104,14 @@ class TemplateProcessor
             $index++;
         }
         $this->tempDocumentMainPart = $this->fixBrokenMacros($this->zipClass->getFromName($this->getMainPartName()));
+
+        $this->tempDocumentMainRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+        if ($this->zipClass->locateName('word/_rels/document.xml.rels')) $this->tempDocumentMainRels = $this->zipClass->getFromName('word/_rels/document.xml.rels');
+
+        $this->tempContentType = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">';
+        if ($this->zipClass->locateName('[Content_Types].xml')!==false) $this->tempContentType = $this->zipClass->getFromName('[Content_Types].xml');
+
+	
     }
 
     /**
@@ -233,6 +244,21 @@ class TemplateProcessor
         $this->tempDocumentFooters = $this->setValueForPart($search, $replace, $this->tempDocumentFooters, $limit);
     }
 
+
+    public function removeVar($macro)
+    {
+        foreach ($this->tempDocumentHeaders as $index => $headerXML) {
+            $this->tempDocumentHeaders[$index] = $this->removeVarForPart($this->tempDocumentHeaders[$index], $macro);
+        }
+
+        $this->tempDocumentMainPart = $this->removeVarForPart($this->tempDocumentMainPart, $macro);
+
+        foreach ($this->tempDocumentFooters as $index => $headerXML) {
+            $this->tempDocumentFooters[$index] = $this->removeVarForPart($this->tempDocumentFooters[$index], $macro);
+        }
+    }
+    
+
     /**
      * Returns array of all variables in template.
      *
@@ -355,15 +381,13 @@ class TemplateProcessor
      */
     public function replaceBlock($blockname, $replacement)
     {
-        preg_match(
-            '/(<\?xml.*)(<w:p.*>\${' . $blockname . '}<\/w:.*?p>)(.*)(<w:p.*\${\/' . $blockname . '}<\/w:.*?p>)/is',
-            $this->tempDocumentMainPart,
-            $matches
-        );
+        $matches = $this->findBlock($blockname);
 
-        if (isset($matches[3])) {
-            $this->tempDocumentMainPart = str_replace(
-                $matches[2] . $matches[3] . $matches[4],
+        if (isset($matches[1]))
+        {
+            $this->tempDocumentMainPart = str_replace
+                (
+                    $matches[0],
                 $replacement,
                 $this->tempDocumentMainPart
             );
@@ -381,6 +405,69 @@ class TemplateProcessor
     }
 
     /**
+     * Dodaje obrazek do ZIPa, zwraca Unikalny ID, ktory pozniej uzywa sie do wstawiania obrazkow
+     */
+    public function addPicture($path)
+    {
+        $uid = 'lbp'.(count($this->newPictures)+1);
+        $newpicture = array();
+        $newpicture['uid'] = $uid;
+        $newpicture['src_path'] = $path;
+        $image = getimagesize($path); //GD wymaga
+        $newpicture['sizex'] = $image[0];
+        $newpicture['sizey'] = $image[1];
+        $this->newPictures[$uid] = $newpicture;
+        return $uid;
+    }
+
+    public function inlinePictureCode($uid)
+    {
+        $sizex = self::PxToEMU($this->newPictures[$uid]['sizex']);
+        $sizey = self::PxToEMU($this->newPictures[$uid]['sizey']);
+        return '<w:r><w:rPr><w:noProof/></w:rPr>'.
+'<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="'.$sizex.'" cy="'.$sizey.'"/><wp:effectExtent l="0" t="0" r="0" b="0"/>'.
+'<wp:docPr id="2" name="Obraz 2" descr="Next"/><wp:cNvGraphicFramePr>'.
+'<a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>'.
+'<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'.
+'<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="Picture '.$uid.'" descr="Next"/><pic:cNvPicPr>'.
+'<a:picLocks noChangeAspect="1" noChangeArrowheads="1"/></pic:cNvPicPr></pic:nvPicPr><pic:blipFill><a:blip r:embed="'.$uid.'"><a:extLst>'.
+'<a:ext uri="{28A0092B-C50C-407E-A947-70E740481C1C}"><a14:useLocalDpi xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" val="0"/></a:ext></a:extLst>'.
+'</a:blip><a:srcRect/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr bwMode="auto"><a:xfrm><a:off x="0" y="0"/><a:ext cx="'.$sizex.'" cy="'.$sizey.'"/></a:xfrm>'.
+'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>'.
+'</w:r>';
+    }
+
+   /* MultilineStr */
+    public function multiline($str)
+    {
+        $str = str_replace('<br>', '<w:br/>', $str);
+        $str = str_replace('<br/>', '<w:br/>', $str);
+        $str = str_replace("\r\n", "<w:br/>", $str);
+        $str = str_replace("\n", "<w:br/>", $str);
+        return $str;
+    }
+
+    public function html($str, $multiline=true)
+    {
+        //to nie dziala jeszcze dobrze :(
+        $str = str_replace('<b>', '<w:r><w:rPr><w:b/></w:rPr>', $str);
+        $str = str_replace('</b>', '</w:r>', $str);
+        if ($multiline) return $this->multiline($str);
+        return $str;
+    }
+
+    public function _br($sp=1)
+    {
+        $str = "";
+        for($i=0;$i<$sp;$i++) $str .= "<w:br/>";
+        return $str;
+    }
+    
+    public function PxToEMU($size)
+    {
+        return $size*914400/96;
+    }
+    /**
      * Saves the result document.
      *
      * @throws \PhpOffice\PhpWord\Exception\Exception
@@ -395,6 +482,26 @@ class TemplateProcessor
 
         $this->zipClass->addFromString($this->getMainPartName(), $this->tempDocumentMainPart);
 
+        $pic_ext = array();
+        foreach ($this->newPictures as $newpicture)
+        {
+           $ext = strtolower(pathinfo($newpicture['src_path'], PATHINFO_EXTENSION));
+           $pic_ext[$ext] = 1;
+           $filename = $newpicture['uid'].'.'.$ext;
+           $picture = file_get_contents($newpicture['src_path']);
+           $this->zipClass->addFromString('word/media/'.$filename, $picture);
+           $uid = $newpicture['uid'];
+           $this->tempDocumentMainRels = str_replace('</Relationships>', '<Relationship Id="'.$uid.'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/'.$filename.'"/></Relationships>', $this->tempDocumentMainRels);
+        }
+        $tmpCt = $this->tempContentType;
+        foreach ($pic_ext as $ext => $val)
+        {
+            if ($ext=="jpg") if (strpos($this->tempContentType, 'Default Extension="jpg"')===false) $this->tempContentType = str_replace('</Types>', '<Default Extension="jpg" ContentType="application/octet-stream"/></Types>', $this->tempContentType);
+            if ($ext=="jpeg") if (strpos($this->tempContentType, 'Default Extension="jpeg"')===false) $this->tempContentType = str_replace('</Types>', '<Default Extension="jpeg" ContentType="application/octet-stream"/></Types>', $this->tempContentType);
+            if ($ext=="png") if (strpos($this->tempContentType, 'Default Extension="png"')===false) $this->tempContentType = str_replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>', $this->tempContentType);
+        }
+        if ($this->tempContentType!=$tmpCt) $this->zipClass->addFromString('[Content_Types].xml', $this->tempContentType);
+        if (count($this->newPictures)>0) $this->zipClass->addFromString('word/_rels/document.xml.rels', $this->tempDocumentMainRels);
         foreach ($this->tempDocumentFooters as $index => $xml) {
             $this->zipClass->addFromString($this->getFooterName($index), $xml);
         }
@@ -475,6 +582,42 @@ class TemplateProcessor
 
         return preg_replace($regExpEscaper->escape($search), $replace, $documentPartXML, $limit);
     }
+    
+    protected function removeVarForPart($documentPartXML, $search)
+    {
+        if (substr($search, 0, 2) !== '${' && substr($search, -1) !== '}') {
+            $search = '${' . $search . '}';
+        }
+
+
+        $tagPos = strpos($documentPartXML, $search);
+        if ($tagPos===false) return $documentPartXML;
+
+
+
+        $rowStart = $this->findRowStart($tagPos, $documentPartXML);
+        $rowEnd = $this->findRowEnd($rowStart, $documentPartXML);
+        if ($rowEnd<$tagPos)
+        {
+           $rowStart = $this->findRowStart($tagPos, $documentPartXML, "w:p");
+           $rowEnd = $this->findRowEnd($rowStart, $documentPartXML, "w:p");
+           if ($rowEnd<$tagPos)
+           {
+               $rowStart = $this->findRowStart($tagPos, $documentPartXML, "w:r");
+               $rowEnd = $this->findRowEnd($rowStart, $documentPartXML, "w:r");
+               if ($rowEnd<$tagPos)
+               {
+                    return $documentPartXML;
+               }
+           }
+        }
+
+
+        $result = substr($documentPartXML, 0, $rowStart);
+        $result .= substr($documentPartXML, $rowEnd);
+
+        return $result;
+    }    
 
     /**
      * Find all variables in $documentPartXML.
@@ -531,12 +674,13 @@ class TemplateProcessor
      *
      * @return int
      */
-    protected function findRowStart($offset)
+    protected function findRowStart($offset, $part="", $tag="w:tr")
     {
-        $rowStart = strrpos($this->tempDocumentMainPart, '<w:tr ', ((strlen($this->tempDocumentMainPart) - $offset) * -1));
+        if ($part=="") $part = $this->tempDocumentMainPart;
+        $rowStart = strrpos($part, '<'.$tag.' ', ((strlen($part) - $offset) * -1));
 
         if (!$rowStart) {
-            $rowStart = strrpos($this->tempDocumentMainPart, '<w:tr>', ((strlen($this->tempDocumentMainPart) - $offset) * -1));
+            $rowStart = strrpos($part, '<'.$tag.'>', ((strlen($part) - $offset) * -1));
         }
         if (!$rowStart) {
             throw new Exception('Can not find the start position of the row to clone.');
@@ -552,9 +696,12 @@ class TemplateProcessor
      *
      * @return int
      */
-    protected function findRowEnd($offset)
+    protected function findRowEnd($offset, $part="", $tag="w:tr")
     {
-        return strpos($this->tempDocumentMainPart, '</w:tr>', $offset) + 7;
+        if ($part=="") $part = $this->tempDocumentMainPart;
+        $pos = strpos($part, '</'.$tag.'>', $offset);
+        if ($pos===false) return 0;
+        return strlen('</'.$tag.'>')+$pos;
     }
 
     /**
@@ -572,5 +719,107 @@ class TemplateProcessor
         }
 
         return substr($this->tempDocumentMainPart, $startPosition, ($endPosition - $startPosition));
+    }
+    private function findBlock($blockname)
+    {
+        // Parse the XML
+        $xml = new \SimpleXMLElement($this->tempDocumentMainPart);
+
+        // Find the starting and ending tags
+        $startNode = false; $endNode = false;
+        foreach ($xml->xpath('//w:t') as $node)
+        {
+            if (strpos($node, '${'.$blockname.'}') !== false)
+            {
+                $startNode = $node;
+                continue;
+            }
+
+            if (strpos($node, '${/'.$blockname.'}') !== false)
+            {
+                $endNode = $node;
+                break;
+            }
+        }
+
+        // Make sure we found the tags
+        if ($startNode === false || $endNode === false)
+        {
+            return null;
+        }
+
+        // Find the parent <w:p> node for the start tag
+        $node = $startNode; $startNode = null;
+        while (is_null($startNode))
+        {
+            $node = $node->xpath('..')[0];
+
+            if ($node->getName() == 'p')
+            {
+                $startNode = $node;
+            }
+        }
+
+        // Find the parent <w:p> node for the end tag
+        $node = $endNode; $endNode = null;
+        while (is_null($endNode))
+        {
+            $node = $node->xpath('..')[0];
+
+            if ($node->getName() == 'p')
+            {
+                $endNode = $node;
+            }
+        }
+
+        /*
+         * NOTE: Because SimpleXML reduces empty tags to "self-closing" tags.
+         * We need to replace the original XML with the version of XML as
+         * SimpleXML sees it. The following example should show the issue
+         * we are facing.
+         *
+         * This is the XML that my document contained orginally.
+         *
+         * ```xml
+         *  <w:p>
+         *      <w:pPr>
+         *          <w:pStyle w:val="TextBody"/>
+         *          <w:rPr></w:rPr>
+         *      </w:pPr>
+         *      <w:r>
+         *          <w:rPr></w:rPr>
+         *          <w:t>${CLONEME}</w:t>
+         *      </w:r>
+         *  </w:p>
+         * ```
+         *
+         * This is the XML that SimpleXML returns from asXml().
+         *
+         * ```xml
+         *  <w:p>
+         *      <w:pPr>
+         *          <w:pStyle w:val="TextBody"/>
+         *          <w:rPr/>
+         *      </w:pPr>
+         *      <w:r>
+         *          <w:rPr/>
+         *          <w:t>${CLONEME}</w:t>
+         *      </w:r>
+         *  </w:p>
+         * ```
+         */
+
+        $this->tempDocumentMainPart = $xml->asXml();
+
+        // Find the xml in between the tags
+        $xmlBlock = null;
+        preg_match
+        (
+            '/'.preg_quote($startNode->asXml(), '/').'(.*?)'.preg_quote($endNode->asXml(), '/').'/is',
+            $this->tempDocumentMainPart,
+            $matches
+        );
+
+        return $matches;
     }
 }
