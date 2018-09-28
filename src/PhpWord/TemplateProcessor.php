@@ -111,7 +111,7 @@ class TemplateProcessor
         $this->tempContentType = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">';
         if ($this->zipClass->locateName('[Content_Types].xml')!==false) $this->tempContentType = $this->zipClass->getFromName('[Content_Types].xml');
 
-	
+
     }
 
     /**
@@ -257,7 +257,7 @@ class TemplateProcessor
             $this->tempDocumentFooters[$index] = $this->removeVarForPart($this->tempDocumentFooters[$index], $macro);
         }
     }
-    
+
 
     /**
      * Returns array of all variables in template.
@@ -358,7 +358,7 @@ class TemplateProcessor
             $xmlBlock = $matches[3];
             $cloned = array();
             for ($i = 1; $i <= $clones; $i++) {
-                $cloned[] = $xmlBlock;
+                $cloned[] = preg_replace('/\${(.*?)}/','${$1_'.$i.'}', $xmlBlock);
             }
 
             if ($replace) {
@@ -462,7 +462,7 @@ class TemplateProcessor
         for($i=0;$i<$sp;$i++) $str .= "<w:br/>";
         return $str;
     }
-    
+
     public function PxToEMU($size)
     {
         return $size*914400/96;
@@ -582,7 +582,7 @@ class TemplateProcessor
 
         return preg_replace($regExpEscaper->escape($search), $replace, $documentPartXML, $limit);
     }
-    
+
     protected function removeVarForPart($documentPartXML, $search)
     {
         if (substr($search, 0, 2) !== '${' && substr($search, -1) !== '}') {
@@ -617,7 +617,7 @@ class TemplateProcessor
         $result .= substr($documentPartXML, $rowEnd);
 
         return $result;
-    }    
+    }
 
     /**
      * Find all variables in $documentPartXML.
